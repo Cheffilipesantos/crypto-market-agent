@@ -1,0 +1,17 @@
+{
+  "assets": [
+    "BTC",
+    "ETH",
+    "SOL",
+    "AAVE",
+    "BNB"
+  ],
+  "scan_seconds": 300,
+  "paper_balance": 10000,
+  "risk_per_trade": 0.01,
+  "minimum_confluence": 4,
+  "trading_threshold": 70,
+  "accumulation_threshold": 70,
+  "real_trading": false,
+  "paper_margin_per_trade": 30.0
+}
