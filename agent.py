@@ -2159,6 +2159,14 @@ def run_cycle():
             # inclusive um STOP ocorrido neste mesmo ciclo.
             shadow_engine.init_storage(DB_FILE)
 
+            shadow_position_event = shadow_engine.update_shadow_position(
+                DB_FILE,
+                paper_positions.TEST_ERA,
+                data["asset"],
+                structure_candles["1m"],
+                data["timestamp"],
+            )
+
             shadow_memory = learning_engine.analyze_recent_memory(
                 DB_FILE,
                 paper_positions.TEST_ERA,
@@ -2185,10 +2193,12 @@ def run_cycle():
                 decision_snapshot_id,
                 shadow_memory,
                 previous_entry_snapshot,
-                data["market_structure"]
+                data["market_structure"],
+                structure_candles["1m"]
             )
 
             data["shadow_result"] = shadow_result
+            data["shadow_position_event"] = shadow_position_event
 
             # Registra histórico do motor de sinais.
             new_leverage_signal = leverage_engine.save_cycle(
