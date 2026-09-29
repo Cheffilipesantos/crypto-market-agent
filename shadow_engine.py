@@ -90,6 +90,31 @@ def init_storage(db_file):
         )
     """)
 
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS shadow_comparisons (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            test_era TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            asset TEXT NOT NULL,
+            snapshot_id INTEGER,
+            category TEXT NOT NULL,
+            official_position_id INTEGER,
+            shadow_position_id INTEGER,
+            official_side TEXT,
+            shadow_side TEXT
+        )
+    """)
+
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS
+        idx_shadow_comparisons_era
+        ON shadow_comparisons (
+            test_era,
+            asset,
+            timestamp
+        )
+    """)
+
     conn.commit()
     conn.close()
 
