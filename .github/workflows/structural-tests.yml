@@ -7,6 +7,9 @@ on:
     paths:
       - structural_core.py
       - test_structural_core.py
+      - test_shadow_structural.py
+      - test_shadow_positions.py
+      - shadow_engine.py
       - .github/workflows/structural-tests.yml
   pull_request:
     paths:
@@ -22,6 +25,10 @@ jobs:
         with:
           python-version: "3.12"
       - name: Compile structural core
-        run: python -m py_compile structural_core.py test_structural_core.py
+        run: python -m py_compile structural_core.py shadow_engine.py test_structural_core.py test_shadow_structural.py test_shadow_positions.py
       - name: Run structural regressions
         run: python test_structural_core.py
+      - name: Run Shadow decision regressions
+        run: python test_shadow_structural.py
+      - name: Run Shadow position regressions
+        run: python test_shadow_positions.py
