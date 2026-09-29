@@ -524,6 +524,158 @@ def update_shadow_position(
     }
 
 
+def record_opening_comparison(
+    db_file,
+    test_era,
+    data,
+    snapshot_id,
+    official_position_id,
+    shadow_position_id,
+):
+    if official_position_id is None and shadow_position_id is None:
+        return None
+
+    conn = sqlite3.connect(db_file)
+
+    official_side = None
+    if official_position_id is not None:
+        row = conn.execute(
+            "SELECT side FROM paper_positions WHERE id = ?",
+            (official_position_id,),
+        ).fetchone()
+        official_side = row[0] if row else None
+
+    shadow_side = None
+    if shadow_position_id is not None:
+        row = conn.execute(
+            "SELECT side FROM shadow_positions WHERE id = ?",
+            (shadow_position_id,),
+        ).fetchone()
+        shadow_side = row[0] if row else None
+
+    if official_position_id is not None and shadow_position_id is not None:
+        category = (
+            "BOTH_SAME_DIRECTION"
+            if official_side == shadow_side
+            else "BOTH_DIFFERENT_DIRECTION"
+        )
+    elif official_position_id is not None:
+        category = "OFFICIAL_ONLY"
+    else:
+        category = "SHADOW_ONLY"
+
+    cursor = conn.execute(
+        """
+        INSERT INTO shadow_comparisons (
+            test_era, timestamp, asset, snapshot_id, category,
+            official_position_id, shadow_position_id,
+            official_side, shadow_side
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            test_era,
+            data["timestamp"],
+            data["asset"],
+            snapshot_id,
+            category,
+            official_position_id,
+            shadow_position_id,
+            official_side,
+            shadow_side,
+        ),
+    )
+    conn.commit()
+    comparison_id = cursor.lastrowid
+    conn.close()
+    return comparison_id
+
+
+def comparison_summary(db_file, test_era):
+    conn = sqlite3.connect(db_file)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        """
+        SELECT
+            c.*,
+            p.status AS official_status,
+            p.exit_reason AS official_exit_reason,
+            p.realized_r AS official_r,
+            s.status AS shadow_status,
+            s.exit_reason AS shadow_exit_reason,
+            s.pnl_r AS shadow_r
+        FROM shadow_comparisons c
+        LEFT JOIN paper_positions p
+            ON p.id = c.official_position_id
+        LEFT JOIN shadow_positions s
+            ON s.id = c.shadow_position_id
+        WHERE c.test_era = ?
+        ORDER BY c.id
+        """,
+        (test_era,),
+    ).fetchall()
+    conn.close()
+
+    summary = {
+        "comparisons": len(rows),
+        "official_only": 0,
+        "shadow_only": 0,
+        "both_same_direction": 0,
+        "both_different_direction": 0,
+        "shadow_avoided_official_loss": 0,
+        "shadow_missed_official_win": 0,
+        "shadow_only_wins": 0,
+        "shadow_only_losses": 0,
+        "completed_pair_r_delta": [],
+    }
+
+    for row in rows:
+        category = row["category"]
+        if category == "OFFICIAL_ONLY":
+            summary["official_only"] += 1
+            if row["official_status"] == "CLOSED":
+                result = float(row["official_r"] or 0.0)
+                if result < 0:
+                    summary["shadow_avoided_official_loss"] += 1
+                elif result > 0:
+                    summary["shadow_missed_official_win"] += 1
+
+        elif category == "SHADOW_ONLY":
+            summary["shadow_only"] += 1
+            if row["shadow_status"] == "CLOSED":
+                result = float(row["shadow_r"] or 0.0)
+                if result > 0:
+                    summary["shadow_only_wins"] += 1
+                elif result < 0:
+                    summary["shadow_only_losses"] += 1
+
+        elif category == "BOTH_SAME_DIRECTION":
+            summary["both_same_direction"] += 1
+
+        elif category == "BOTH_DIFFERENT_DIRECTION":
+            summary["both_different_direction"] += 1
+
+        if (
+            row["official_position_id"] is not None
+            and row["shadow_position_id"] is not None
+            and row["official_status"] == "CLOSED"
+            and row["shadow_status"] == "CLOSED"
+            and row["official_exit_reason"] != "AMBIGUOUS"
+            and row["shadow_exit_reason"] != "AMBIGUOUS"
+        ):
+            summary["completed_pair_r_delta"].append(
+                float(row["shadow_r"] or 0.0)
+                - float(row["official_r"] or 0.0)
+            )
+
+    deltas = summary["completed_pair_r_delta"]
+    summary["completed_pairs"] = len(deltas)
+    summary["average_shadow_minus_official_r"] = (
+        sum(deltas) / len(deltas) if deltas else None
+    )
+    return summary
+
+
 def _canonical_tf(market_structure_context, timeframe):
     if not market_structure_context:
         return {}
