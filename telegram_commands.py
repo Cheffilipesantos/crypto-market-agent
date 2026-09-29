@@ -86,8 +86,7 @@ def positions_report(db_file):
         WHERE test_era = ? AND status = 'OPEN'
         ORDER BY opened_at
         """,
-        (paper_positions.TEST_ERA,),
-        , (paper_positions.TEST_ERA,)
+        (paper_positions.TEST_ERA,)
     ).fetchall()
 
     conn.close()
@@ -305,8 +304,7 @@ def performance(db_file, asset=None):
               AND status = 'CLOSED'
             ORDER BY opened_at
             """,
-            (paper_positions.TEST_ERA,),
-            , (paper_positions.TEST_ERA,)
+            (paper_positions.TEST_ERA,)
         ).fetchall()
 
     conn.close()
