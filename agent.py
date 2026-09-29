@@ -2167,6 +2167,21 @@ def run_cycle():
                 data["timestamp"],
             )
 
+            if (
+                shadow_position_event
+                and shadow_position_event.get("status") == "CLOSED"
+            ):
+                learning_engine.record_learning_event(
+                    DB_FILE,
+                    paper_positions.TEST_ERA,
+                    data["timestamp"],
+                    data["asset"],
+                    "SHADOW_POSITION_CLOSED",
+                    position_id=shadow_position_event.get("id"),
+                    snapshot_id=decision_snapshot_id,
+                    details=shadow_position_event,
+                )
+
             shadow_memory = learning_engine.analyze_recent_memory(
                 DB_FILE,
                 paper_positions.TEST_ERA,
@@ -2199,6 +2214,18 @@ def run_cycle():
 
             data["shadow_result"] = shadow_result
             data["shadow_position_event"] = shadow_position_event
+
+            if shadow_result.get("opened_position_id") is not None:
+                learning_engine.record_learning_event(
+                    DB_FILE,
+                    paper_positions.TEST_ERA,
+                    data["timestamp"],
+                    data["asset"],
+                    "SHADOW_POSITION_OPENED",
+                    position_id=shadow_result["opened_position_id"],
+                    snapshot_id=decision_snapshot_id,
+                    details=shadow_result.get("plan"),
+                )
 
             # Registra histórico do motor de sinais.
             new_leverage_signal = leverage_engine.save_cycle(
