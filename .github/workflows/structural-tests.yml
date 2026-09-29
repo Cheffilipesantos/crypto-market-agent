@@ -20,6 +20,7 @@ on:
       - test_structural_replay.py
       - test_leverage.py
       - leverage_engine.py
+      - paper_positions.py
       - .github/workflows/structural-tests.yml
   pull_request:
     paths:
@@ -38,6 +39,7 @@ on:
       - test_structural_replay.py
       - test_leverage.py
       - leverage_engine.py
+      - paper_positions.py
 
 jobs:
   structural-core:
