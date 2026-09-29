@@ -53,6 +53,43 @@ def init_storage(db_file):
         )
     """)
 
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS shadow_positions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            test_era TEXT NOT NULL,
+            asset TEXT NOT NULL,
+            side TEXT NOT NULL,
+            setup_type TEXT NOT NULL,
+            entry REAL NOT NULL,
+            stop REAL NOT NULL,
+            t1 REAL NOT NULL,
+            t2 REAL NOT NULL,
+            t3 REAL NOT NULL,
+            risk_per_unit REAL NOT NULL,
+            status TEXT NOT NULL,
+            opened_at TEXT NOT NULL,
+            closed_at TEXT,
+            exit_reason TEXT,
+            pnl_r REAL,
+            mfe_r REAL NOT NULL DEFAULT 0,
+            mae_r REAL NOT NULL DEFAULT 0,
+            t1_hit INTEGER NOT NULL DEFAULT 0,
+            t2_hit INTEGER NOT NULL DEFAULT 0,
+            last_candle_ms INTEGER,
+            entry_snapshot_id INTEGER
+        )
+    """)
+
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS
+        idx_shadow_positions_open
+        ON shadow_positions (
+            test_era,
+            asset,
+            status
+        )
+    """)
+
     conn.commit()
     conn.close()
 
