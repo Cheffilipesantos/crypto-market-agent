@@ -2235,6 +2235,16 @@ def run_cycle():
                         },
                     )
 
+            shadow_comparison_id = shadow_engine.record_opening_comparison(
+                DB_FILE,
+                paper_positions.TEST_ERA,
+                data,
+                decision_snapshot_id,
+                new_position_id,
+                shadow_result.get("opened_position_id"),
+            )
+            data["shadow_comparison_id"] = shadow_comparison_id
+
             # Telegram de entrada somente quando uma posição
             # PAPER foi realmente aberta.
             new_leverage_signal = (
