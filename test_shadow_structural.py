@@ -94,4 +94,51 @@ plan = build_structural_plan(data, wait_execution)
 assert plan["decision"] == "WAIT"
 assert plan["setup_type"] == "STRUCTURAL_WAIT_EXECUTION"
 
+
+# A clustered opposing level before 1R must reject the entry and preserve room evidence.
+room_blocked = context(
+    {
+        "4h": "BEARISH_STRUCTURE",
+        "2h": "BEARISH_STRUCTURE",
+        "1h": "BEARISH_STRUCTURE",
+        "15m": "BEARISH_STRUCTURE",
+        "5m": "BEARISH_STRUCTURE",
+        "1m": "BEARISH_STRUCTURE",
+    },
+    pivots_5m=[
+        {"type": "LOW", "price": 98.0},
+        {"type": "HIGH", "price": 103.0},
+    ],
+)
+room_blocked["mtf"]["15m"]["canonical"]["levels"] = [
+    {"price": 98.0, "touches": 3, "strength": 3, "current_role": "SUPPORT"},
+]
+plan = build_structural_plan(data, room_blocked)
+assert plan["decision"] == "NO_TRADE"
+assert plan["setup_type"] == "STRUCTURAL_ROOM_REJECTED"
+assert plan["evidence"]["next_obstacle"]["price"] == 98.0
+assert plan["evidence"]["obstacle_room_r"] < 1.0
+
+# A level beyond 1R is recorded but does not veto the structural plan.
+room_clear = context(
+    {
+        "4h": "BEARISH_STRUCTURE",
+        "2h": "BEARISH_STRUCTURE",
+        "1h": "BEARISH_STRUCTURE",
+        "15m": "BEARISH_STRUCTURE",
+        "5m": "BEARISH_STRUCTURE",
+        "1m": "BEARISH_STRUCTURE",
+    },
+    pivots_5m=[
+        {"type": "LOW", "price": 98.0},
+        {"type": "HIGH", "price": 103.0},
+    ],
+)
+room_clear["mtf"]["1h"]["canonical"]["levels"] = [
+    {"price": 94.0, "touches": 3, "strength": 3, "current_role": "SUPPORT"},
+]
+plan = build_structural_plan(data, room_clear)
+assert plan["decision"] == "SHORT"
+assert plan["evidence"]["obstacle_room_r"] > 1.0
+
 print("SHADOW STRUCTURAL TESTS: OK")
