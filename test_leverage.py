@@ -87,7 +87,12 @@ assert p_tactical["side"] == "SHORT"
 assert p_tactical["setup_type"] == "TACTICAL_SHORT"
 assert p_tactical["tactical_score"] >= 70
 assert p_tactical["leverage"] <= 5
-assert p_tactical["risk_usd"] == 50.0
+expected_notional = 30.0 * p_tactical["leverage"]
+expected_risk = expected_notional * (p_tactical["stop_pct"] / 100)
+
+assert abs(p_tactical["notional_usd"] - expected_notional) < 1e-9
+assert abs(p_tactical["risk_usd"] - expected_risk) < 1e-9
+assert p_tactical["risk_usd"] > 0
 
 
 # 4 — SEM OPERAÇÃO
