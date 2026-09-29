@@ -775,6 +775,37 @@ def _structural_invalidation(core_5m, core_15m, side, entry):
     return pivot_price + buffer_value
 
 
+def _next_structural_obstacle(cores, side, entry):
+    """Nearest clustered structure in the trade direction."""
+    candidates = []
+    for timeframe, core in cores:
+        for level in core.get("levels", []):
+            try:
+                price = float(level["price"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if side == "LONG" and price > entry:
+                candidates.append((price, timeframe, level))
+            elif side == "SHORT" and price < entry:
+                candidates.append((price, timeframe, level))
+
+    if not candidates:
+        return None
+
+    if side == "LONG":
+        price, timeframe, level = min(candidates, key=lambda x: x[0])
+    else:
+        price, timeframe, level = max(candidates, key=lambda x: x[0])
+
+    return {
+        "price": price,
+        "timeframe": timeframe,
+        "touches": level.get("touches"),
+        "strength": level.get("strength"),
+        "current_role": level.get("current_role"),
+    }
+
+
 def build_structural_plan(data, market_structure_context):
     """Independent Shadow hypothesis. Never sends orders or changes Official."""
     entry = float(data["price"])
@@ -874,12 +905,39 @@ def build_structural_plan(data, market_structure_context):
     risk_pct = risk_per_unit / entry if entry else 0.0
     evidence["risk_pct"] = risk_pct
 
+    obstacle = _next_structural_obstacle(
+        (
+            ("5m", core_5m),
+            ("15m", core_15m),
+            ("1h", core_1h),
+        ),
+        side,
+        entry,
+    )
+    obstacle_room_r = None
+    if obstacle is not None and risk_per_unit > 0:
+        obstacle_room_r = abs(obstacle["price"] - entry) / risk_per_unit
+    evidence["next_obstacle"] = obstacle
+    evidence["obstacle_room_r"] = obstacle_room_r
+
     if risk_per_unit <= 0 or risk_pct > 0.05:
         return {
             "decision": "NO_TRADE",
             "side": side,
             "setup_type": "STRUCTURAL_RISK_REJECTED",
             "reason": "Invalidação estrutural produz risco inválido ou superior a 5%.",
+            "evidence": evidence,
+        }
+
+    # A structural level before 1R means the first planned reward already
+    # runs into clustered opposing structure. Keep it as NO_TRADE in Shadow;
+    # room in R remains recorded for replay/statistical review.
+    if obstacle_room_r is not None and obstacle_room_r < 1.0:
+        return {
+            "decision": "NO_TRADE",
+            "side": side,
+            "setup_type": "STRUCTURAL_ROOM_REJECTED",
+            "reason": "Próximo obstáculo estrutural aparece antes de 1R.",
             "evidence": evidence,
         }
 
