@@ -96,14 +96,14 @@ def detect_raw_pivots(candles, left=2, right=2):
             _f(cur, "high") >= _f(x, "high") for x in right_part
         ):
             pivots.append({
-                "index": i, "time": cur.get("time"),
+                "index": i, "confirmed_index": i + right, "time": cur.get("time"),
                 "type": "HIGH", "price": _f(cur, "high"),
             })
         if all(_f(cur, "low") < _f(x, "low") for x in left_part) and all(
             _f(cur, "low") <= _f(x, "low") for x in right_part
         ):
             pivots.append({
-                "index": i, "time": cur.get("time"),
+                "index": i, "confirmed_index": i + right, "time": cur.get("time"),
                 "type": "LOW", "price": _f(cur, "low"),
             })
     return sorted(pivots, key=lambda x: (x["index"], 0 if x["type"] == "LOW" else 1))
@@ -168,7 +168,7 @@ def detect_structure_breaks(candles, pivots, tolerance_pct):
     """Detect BOS/CHOCH using only structure known before each break candle.
 
     This deliberately avoids future leakage: the structural state for candle i
-    is calculated only from pivots whose index is strictly earlier than i.
+    is calculated only from pivots that were confirmed before candle i.
     """
     events = []
     broken = set()
@@ -176,7 +176,10 @@ def detect_structure_breaks(candles, pivots, tolerance_pct):
         return events
 
     for i in range(1, len(candles)):
-        prior = [p for p in pivots if int(p["index"]) < i]
+        prior = [
+            p for p in pivots
+            if int(p.get("confirmed_index", p["index"])) < i
+        ]
         if not prior:
             continue
 
