@@ -2024,6 +2024,9 @@ def run_cycle():
                 "5m": market_structure.closed_candles(
                     get_candles(asset, "5m", 120), "5m"
                 ),
+                "1m": market_structure.closed_candles(
+                    get_candles(asset, "1m", 120), "1m"
+                ),
             }
 
             structure_mtf = (
