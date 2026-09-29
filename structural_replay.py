@@ -89,7 +89,7 @@ def resolve_plan(plan, future_1m):
         mae_r = max(mae_r, adverse / risk)
 
         # Same candle contains both terminal outcomes: ordering is unknowable.
-        if stop_hit and t3_hit:
+        if stop_hit and (t1_hit or t2_hit or t3_hit):
             return {
                 "status": "AMBIGUOUS",
                 "exit_reason": "AMBIGUOUS",
