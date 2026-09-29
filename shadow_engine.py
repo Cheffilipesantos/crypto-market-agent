@@ -1091,7 +1091,7 @@ def process_completed_comparison_autopsies(db_file, test_era):
     for row in rows:
         official_done = (
             row["official_position_id"] is None
-            or row["official_status"] == "CLOSED"
+            or row["official_status"] in ("CLOSED", "AMBIGUOUS")
         )
         shadow_done = (
             row["shadow_position_id"] is None
@@ -1103,8 +1103,8 @@ def process_completed_comparison_autopsies(db_file, test_era):
         # Ambiguous OHLC ordering is deliberately excluded from comparative
         # conclusions. Preserve it as an explicit factual classification.
         if (
-            row["official_exit_reason"] == "AMBIGUOUS"
-            or row["shadow_exit_reason"] == "AMBIGUOUS"
+            str(row["official_exit_reason"] or "").startswith("AMBIGUOUS")
+            or str(row["shadow_exit_reason"] or "").startswith("AMBIGUOUS")
         ):
             classification = "AMBIGUOUS_EXCLUDED"
         elif row["category"] == "OFFICIAL_ONLY":
