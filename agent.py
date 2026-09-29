@@ -2272,6 +2272,28 @@ def run_cycle():
             )
             data["shadow_comparison_id"] = shadow_comparison_id
 
+            # Materializa autopsias factuais somente quando os resultados
+            # envolvidos ja estao encerrados. A funcao e idempotente.
+            new_comparison_autopsies = (
+                shadow_engine.process_completed_comparison_autopsies(
+                    DB_FILE,
+                    paper_positions.TEST_ERA,
+                )
+            )
+            data["new_comparison_autopsies"] = new_comparison_autopsies
+
+            for autopsy in new_comparison_autopsies:
+                learning_engine.record_learning_event(
+                    DB_FILE,
+                    paper_positions.TEST_ERA,
+                    data["timestamp"],
+                    autopsy["asset"],
+                    "OFFICIAL_SHADOW_AUTOPSY",
+                    position_id=None,
+                    snapshot_id=decision_snapshot_id,
+                    details=autopsy,
+                )
+
             # Telegram de entrada somente quando uma posição
             # PAPER foi realmente aberta.
             new_leverage_signal = (
