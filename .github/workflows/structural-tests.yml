@@ -1,0 +1,27 @@
+name: Structural Core Tests
+
+on:
+  push:
+    branches:
+      - dev/structural-learning-v1
+    paths:
+      - structural_core.py
+      - test_structural_core.py
+      - .github/workflows/structural-tests.yml
+  pull_request:
+    paths:
+      - structural_core.py
+      - test_structural_core.py
+
+jobs:
+  structural-core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile structural core
+        run: python -m py_compile structural_core.py test_structural_core.py
+      - name: Run structural regressions
+        run: python test_structural_core.py
