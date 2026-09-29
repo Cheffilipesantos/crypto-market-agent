@@ -241,6 +241,206 @@ def compare_market_state(previous, current):
     }
 
 
+def _canonical_tf(market_structure_context, timeframe):
+    if not market_structure_context:
+        return {}
+    mtf = market_structure_context.get("mtf", {})
+    return mtf.get(timeframe, {}).get("canonical", {}) or {}
+
+
+def _direction(state):
+    if state == "BULLISH_STRUCTURE":
+        return "LONG"
+    if state == "BEARISH_STRUCTURE":
+        return "SHORT"
+    return None
+
+
+def _trigger_matches(core, side):
+    expected_break = "UP" if side == "LONG" else "DOWN"
+    if _direction(core.get("state")) == side:
+        return True
+
+    last_break = core.get("last_break") or {}
+    if last_break.get("direction") == expected_break:
+        return True
+
+    wanted = (
+        {"BULLISH_RETEST_HELD", "LOWER_SWEEP_RECLAIMED"}
+        if side == "LONG"
+        else {"BEARISH_RETEST_HELD", "UPPER_SWEEP_REJECTED"}
+    )
+    return any(
+        (level.get("reaction") or {}).get("event") in wanted
+        for level in core.get("levels", [])
+    )
+
+
+def _structural_invalidation(core_5m, core_15m, side, entry):
+    pivot_type = "LOW" if side == "LONG" else "HIGH"
+    candidates = []
+
+    for core in (core_5m, core_15m):
+        for pivot in reversed(core.get("recent_pivots", [])):
+            if pivot.get("type") != pivot_type:
+                continue
+            price = float(pivot["price"])
+            if side == "LONG" and price < entry:
+                candidates.append((price, core))
+                break
+            if side == "SHORT" and price > entry:
+                candidates.append((price, core))
+                break
+
+    if not candidates:
+        return None
+
+    # Nearest valid structural invalidation keeps risk tied to current structure.
+    if side == "LONG":
+        pivot_price, core = max(candidates, key=lambda x: x[0])
+        buffer_value = max(
+            float(core.get("atr") or 0.0) * 0.25,
+            entry * float(core.get("tolerance_pct") or 0.0),
+        )
+        return pivot_price - buffer_value
+
+    pivot_price, core = min(candidates, key=lambda x: x[0])
+    buffer_value = max(
+        float(core.get("atr") or 0.0) * 0.25,
+        entry * float(core.get("tolerance_pct") or 0.0),
+    )
+    return pivot_price + buffer_value
+
+
+def build_structural_plan(data, market_structure_context):
+    """Independent Shadow hypothesis. Never sends orders or changes Official."""
+    entry = float(data["price"])
+    core_4h = _canonical_tf(market_structure_context, "4h")
+    core_2h = _canonical_tf(market_structure_context, "2h")
+    core_1h = _canonical_tf(market_structure_context, "1h")
+    core_15m = _canonical_tf(market_structure_context, "15m")
+    core_5m = _canonical_tf(market_structure_context, "5m")
+    core_1m = _canonical_tf(market_structure_context, "1m")
+
+    states = {
+        "4h": core_4h.get("state"),
+        "2h": core_2h.get("state"),
+        "1h": core_1h.get("state"),
+        "15m": core_15m.get("state"),
+        "5m": core_5m.get("state"),
+        "1m": core_1m.get("state"),
+    }
+
+    side_1h = _direction(states["1h"])
+    side_15m = _direction(states["15m"])
+
+    evidence = {
+        "states": states,
+        "trigger_5m": False,
+        "trigger_1m": False,
+        "macro_opposition": False,
+    }
+
+    if side_1h is None or side_15m is None:
+        return {
+            "decision": "WAIT",
+            "side": "NONE",
+            "setup_type": "STRUCTURAL_WAIT",
+            "reason": "1H/15m ainda sem estrutura direcional confirmada.",
+            "evidence": evidence,
+        }
+
+    if side_1h != side_15m:
+        return {
+            "decision": "NO_TRADE",
+            "side": "NONE",
+            "setup_type": "STRUCTURAL_CONFLICT",
+            "reason": "1H e 15m apontam direções estruturais opostas.",
+            "evidence": evidence,
+        }
+
+    side = side_1h
+    opposite = "SHORT" if side == "LONG" else "LONG"
+    macro_sides = [_direction(states["4h"]), _direction(states["2h"])]
+    macro_opposition = all(x == opposite for x in macro_sides)
+    evidence["macro_opposition"] = macro_opposition
+
+    if macro_opposition:
+        return {
+            "decision": "NO_TRADE",
+            "side": "NONE",
+            "setup_type": "STRUCTURAL_MACRO_CONFLICT",
+            "reason": "4H e 2H confirmam estrutura oposta à hipótese 1H/15m.",
+            "evidence": evidence,
+        }
+
+    trigger_5m = _trigger_matches(core_5m, side)
+    trigger_1m = _trigger_matches(core_1m, side)
+    evidence["trigger_5m"] = trigger_5m
+    evidence["trigger_1m"] = trigger_1m
+
+    if not trigger_5m:
+        return {
+            "decision": "WAIT",
+            "side": side,
+            "setup_type": "STRUCTURAL_WAIT_TRIGGER",
+            "reason": "Direção estrutural existe, mas 5m ainda não confirmou o gatilho.",
+            "evidence": evidence,
+        }
+
+    if not trigger_1m:
+        return {
+            "decision": "WAIT",
+            "side": side,
+            "setup_type": "STRUCTURAL_WAIT_EXECUTION",
+            "reason": "5m confirmou, mas 1m ainda não confirmou execução.",
+            "evidence": evidence,
+        }
+
+    stop = _structural_invalidation(core_5m, core_15m, side, entry)
+    if stop is None:
+        return {
+            "decision": "NO_TRADE",
+            "side": side,
+            "setup_type": "STRUCTURAL_NO_INVALIDATION",
+            "reason": "Sem swing válido para definir invalidação estrutural.",
+            "evidence": evidence,
+        }
+
+    risk_per_unit = abs(entry - stop)
+    risk_pct = risk_per_unit / entry if entry else 0.0
+    evidence["risk_pct"] = risk_pct
+
+    if risk_per_unit <= 0 or risk_pct > 0.05:
+        return {
+            "decision": "NO_TRADE",
+            "side": side,
+            "setup_type": "STRUCTURAL_RISK_REJECTED",
+            "reason": "Invalidação estrutural produz risco inválido ou superior a 5%.",
+            "evidence": evidence,
+        }
+
+    sign = 1 if side == "LONG" else -1
+    targets = {
+        "t1": entry + sign * risk_per_unit,
+        "t2": entry + sign * risk_per_unit * 2,
+        "t3": entry + sign * risk_per_unit * 3,
+    }
+
+    return {
+        "decision": side,
+        "side": side,
+        "setup_type": "STRUCTURAL_ALIGNMENT",
+        "entry": entry,
+        "stop": stop,
+        **targets,
+        "risk_per_unit": risk_per_unit,
+        "risk_pct": risk_pct,
+        "reason": "1H/15m alinhados, sem oposição conjunta 4H/2H, com confirmação 5m e 1m.",
+        "evidence": evidence,
+    }
+
+
 def evaluate_shadow(
     db_file,
     test_era,
@@ -251,61 +451,31 @@ def evaluate_shadow(
     previous_entry_snapshot=None,
     market_structure_context=None,
 ):
+    structural_plan = build_structural_plan(
+        data,
+        market_structure_context,
+    )
+
     evidence = {
-        "previous_position_id": (
-            learning_memory.get("previous_position_id")
-        ),
-        "previous_exit_reason": (
-            learning_memory.get("previous_exit_reason")
-        ),
-        "minutes_since_close": (
-            learning_memory.get("minutes_since_close")
-        ),
-        "recent_stop": (
-            learning_memory.get("recent_stop", False)
-        ),
-        "market_structure": market_structure_context,
+        "previous_position_id": learning_memory.get("previous_position_id"),
+        "previous_exit_reason": learning_memory.get("previous_exit_reason"),
+        "minutes_since_close": learning_memory.get("minutes_since_close"),
+        "recent_stop": learning_memory.get("recent_stop", False),
+        "structural_plan": structural_plan,
     }
 
-    # Sem sinal oficial: apenas observa.
-    if official_plan.get("status") != "PAPER_READY":
-        decision = "OBSERVE"
-        reason = "Oficial sem PAPER_READY."
-
-    # Primeiro setup desse tipo ou sem STOP anterior.
-    elif not learning_memory.get("recent_stop"):
-        decision = "AGREE"
-        reason = "Sem STOP anterior comparável."
-
-    # Existe STOP, mas ele ocorreu antes da nova memória
-    # possuir snapshot de entrada vinculado.
-    elif previous_entry_snapshot is None:
-        decision = "INSUFFICIENT_HISTORY"
-        reason = (
-            "STOP anterior encontrado, mas sem snapshot "
-            "de entrada vinculado."
-        )
-
-    else:
-        comparison = compare_market_state(
+    # Keep the old re-entry comparison as observational memory, not as the
+    # Shadow decision itself. Structural Shadow must be independent.
+    if previous_entry_snapshot is not None:
+        evidence["reentry_comparison"] = compare_market_state(
             previous_entry_snapshot,
             data,
         )
 
-        evidence["comparison"] = comparison
-
-        if comparison["change_count"] == 0:
-            decision = "REENTRY_NO_NEW_EVIDENCE"
-            reason = (
-                "Mesmo setup após STOP sem mudança relevante "
-                "detectada no contexto."
-            )
-        else:
-            decision = "REENTRY_CHANGED_CONTEXT"
-            reason = (
-                "Mesmo setup após STOP, mas com mudança "
-                "relevante detectada no contexto."
-            )
+    decision = structural_plan["decision"]
+    side = structural_plan.get("side", "NONE")
+    setup_type = structural_plan.get("setup_type", "NONE")
+    reason = structural_plan.get("reason")
 
     save_shadow_decision(
         db_file,
@@ -314,17 +484,35 @@ def evaluate_shadow(
         official_plan,
         snapshot_id,
         decision,
-        shadow_side=official_plan.get("side", "NONE"),
-        shadow_setup_type=official_plan.get(
-            "setup_type",
-            "NONE",
-        ),
+        shadow_side=side,
+        shadow_setup_type=setup_type,
         reason=reason,
         evidence=evidence,
     )
 
+    official_side = (
+        official_plan.get("side")
+        if official_plan.get("status") == "PAPER_READY"
+        else "NONE"
+    )
+    comparison = (
+        "AGREE_DIRECTION"
+        if side != "NONE" and side == official_side
+        else "SHADOW_ONLY"
+        if side != "NONE" and official_side == "NONE"
+        else "OFFICIAL_ONLY"
+        if side == "NONE" and official_side != "NONE"
+        else "DISAGREE_DIRECTION"
+        if side != "NONE" and official_side != "NONE"
+        else "BOTH_NO_TRADE"
+    )
+
     return {
         "decision": decision,
+        "side": side,
+        "setup_type": setup_type,
         "reason": reason,
+        "plan": structural_plan,
+        "comparison": comparison,
         "evidence": evidence,
     }
