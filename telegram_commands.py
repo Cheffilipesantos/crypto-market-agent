@@ -83,9 +83,10 @@ def positions_report(db_file):
         """
         SELECT *
         FROM paper_positions
-        WHERE status = 'OPEN'
+        WHERE test_era = ? AND status = 'OPEN'
         ORDER BY opened_at
-        """
+        """,
+        (paper_positions.TEST_ERA,),
     ).fetchall()
 
     conn.close()
@@ -151,10 +152,11 @@ def report(db_file, days=1):
         """
         SELECT *
         FROM paper_positions
-        WHERE datetime(opened_at) >= datetime('now', ?)
+        WHERE test_era = ?
+          AND datetime(opened_at) >= datetime('now', ?)
         ORDER BY opened_at
         """,
-        (f"-{int(days)} days",),
+        (paper_positions.TEST_ERA, f"-{int(days)} days",),
     ).fetchall()
 
     conn.close()
@@ -286,20 +288,23 @@ def performance(db_file, asset=None):
             """
             SELECT *
             FROM paper_positions
-            WHERE asset = ?
+            WHERE test_era = ?
+              AND asset = ?
               AND status = 'CLOSED'
             ORDER BY opened_at
             """,
-            (asset.upper(),),
+            (paper_positions.TEST_ERA, asset.upper(),),
         ).fetchall()
     else:
         rows = conn.execute(
             """
             SELECT *
             FROM paper_positions
-            WHERE status = 'CLOSED'
+            WHERE test_era = ?
+              AND status = 'CLOSED'
             ORDER BY opened_at
-            """
+            """,
+            (paper_positions.TEST_ERA,),
         ).fetchall()
 
     conn.close()
