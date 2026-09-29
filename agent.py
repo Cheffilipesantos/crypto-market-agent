@@ -2185,7 +2185,7 @@ def run_cycle():
                 decision_snapshot_id,
                 shadow_memory,
                 previous_entry_snapshot,
-                structure_context
+                data["market_structure"]
             )
 
             data["shadow_result"] = shadow_result
