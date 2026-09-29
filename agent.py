@@ -2095,6 +2095,8 @@ def run_cycle():
             # STORAGE LONG/SHORT PAPER
             leverage_engine.init_storage(DB_FILE)
             paper_positions.init_storage(DB_FILE)
+    learning_engine.init_storage(DB_FILE)
+    shadow_engine.init_storage(DB_FILE)
 
             # Atualiza primeiro qualquer posição PAPER já aberta
             # usando candles de 1 minuto desde o último acompanhamento.
@@ -2157,8 +2159,6 @@ def run_cycle():
             # SHADOW ENGINE
             # Executa depois da atualização PAPER para enxergar
             # inclusive um STOP ocorrido neste mesmo ciclo.
-            shadow_engine.init_storage(DB_FILE)
-
             shadow_position_event = shadow_engine.update_shadow_position(
                 DB_FILE,
                 paper_positions.TEST_ERA,
