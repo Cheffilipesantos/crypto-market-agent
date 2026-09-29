@@ -1,3 +1,5 @@
+import structural_core
+
 def candle_anatomy(candle):
     o = float(candle["open"])
     h = float(candle["high"])
@@ -1025,6 +1027,7 @@ def analyze_multitimeframe(candles_by_tf):
         "1h": "OPERATIONAL_STRUCTURE",
         "15m": "CONFIRMATION",
         "5m": "TRIGGER_CONTEXT",
+        "1m": "EXECUTION_CONTEXT",
     }
 
     result = {}
@@ -1043,6 +1046,7 @@ def analyze_multitimeframe(candles_by_tf):
         range_state = analyze_range(candles)
         sequence = analyze_candle_sequence(candles)
         sr_context = analyze_sr_context(candles)
+        canonical = structural_core.analyze(candles)
 
         result[tf] = {
             "role": role,
@@ -1060,6 +1064,7 @@ def analyze_multitimeframe(candles_by_tf):
             "lower_rejections": sequence.get("lower_rejections"),
             "upper_rejections": sequence.get("upper_rejections"),
             "sr_context": sr_context,
+            "canonical": canonical,
         }
 
     return result
