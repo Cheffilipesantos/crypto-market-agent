@@ -476,6 +476,7 @@ def posttrade_report(db_file, asset=None):
 
 
 def shadow_report(db_file):
+    shadow_engine.init_storage(db_file)
     summary = shadow_engine.comparison_summary(
         db_file,
         paper_positions.TEST_ERA,
