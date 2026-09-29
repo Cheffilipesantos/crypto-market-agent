@@ -115,6 +115,34 @@ def init_storage(db_file):
         )
     """)
 
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS comparison_autopsies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            comparison_id INTEGER NOT NULL UNIQUE,
+            test_era TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            asset TEXT NOT NULL,
+            category TEXT NOT NULL,
+            classification TEXT NOT NULL,
+            official_position_id INTEGER,
+            shadow_position_id INTEGER,
+            official_r REAL,
+            shadow_r REAL,
+            shadow_minus_official_r REAL,
+            details_json TEXT NOT NULL
+        )
+    """)
+
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS
+        idx_comparison_autopsies_era
+        ON comparison_autopsies (
+            test_era,
+            asset,
+            timestamp
+        )
+    """)
+
     conn.commit()
     conn.close()
 
@@ -964,3 +992,161 @@ def evaluate_shadow(
         "opened_position_id": opened_position_id,
         "evidence": evidence,
     }
+
+
+def process_completed_comparison_autopsies(db_file, test_era):
+    """Persist factual Official x Shadow outcome comparisons exactly once.
+
+    This is observational bookkeeping. It records what each system did and the
+    realized R when outcomes are complete; it does not infer why one outcome
+    was better or claim causality from structural differences.
+    """
+    conn = sqlite3.connect(db_file)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        """
+        SELECT
+            c.*,
+            p.status AS official_status,
+            p.exit_reason AS official_exit_reason,
+            p.realized_r AS official_r,
+            s.status AS shadow_status,
+            s.exit_reason AS shadow_exit_reason,
+            s.pnl_r AS shadow_r,
+            s.mfe_r AS shadow_mfe_r,
+            s.mae_r AS shadow_mae_r
+        FROM shadow_comparisons c
+        LEFT JOIN paper_positions p
+            ON p.id = c.official_position_id
+        LEFT JOIN shadow_positions s
+            ON s.id = c.shadow_position_id
+        LEFT JOIN comparison_autopsies a
+            ON a.comparison_id = c.id
+        WHERE c.test_era = ?
+          AND a.id IS NULL
+        ORDER BY c.id
+        """,
+        (test_era,),
+    ).fetchall()
+
+    created = []
+    for row in rows:
+        official_done = (
+            row["official_position_id"] is None
+            or row["official_status"] == "CLOSED"
+        )
+        shadow_done = (
+            row["shadow_position_id"] is None
+            or row["shadow_status"] == "CLOSED"
+        )
+        if not (official_done and shadow_done):
+            continue
+
+        # Ambiguous OHLC ordering is deliberately excluded from comparative
+        # conclusions. Preserve it as an explicit factual classification.
+        if (
+            row["official_exit_reason"] == "AMBIGUOUS"
+            or row["shadow_exit_reason"] == "AMBIGUOUS"
+        ):
+            classification = "AMBIGUOUS_EXCLUDED"
+        elif row["category"] == "OFFICIAL_ONLY":
+            r = float(row["official_r"] or 0.0)
+            classification = (
+                "SHADOW_AVOIDED_OFFICIAL_LOSS"
+                if r < 0
+                else "SHADOW_MISSED_OFFICIAL_WIN"
+                if r > 0
+                else "OFFICIAL_ONLY_FLAT"
+            )
+        elif row["category"] == "SHADOW_ONLY":
+            r = float(row["shadow_r"] or 0.0)
+            classification = (
+                "SHADOW_ONLY_WIN"
+                if r > 0
+                else "SHADOW_ONLY_LOSS"
+                if r < 0
+                else "SHADOW_ONLY_FLAT"
+            )
+        else:
+            official_r = float(row["official_r"] or 0.0)
+            shadow_r = float(row["shadow_r"] or 0.0)
+            delta = shadow_r - official_r
+            classification = (
+                "PAIRED_SHADOW_HIGHER_R"
+                if delta > 0
+                else "PAIRED_OFFICIAL_HIGHER_R"
+                if delta < 0
+                else "PAIRED_EQUAL_R"
+            )
+
+        official_r = (
+            None if row["official_position_id"] is None
+            else float(row["official_r"] or 0.0)
+        )
+        shadow_r = (
+            None if row["shadow_position_id"] is None
+            else float(row["shadow_r"] or 0.0)
+        )
+        delta = (
+            shadow_r - official_r
+            if official_r is not None and shadow_r is not None
+            else None
+        )
+        details = {
+            "comparison_id": row["id"],
+            "category": row["category"],
+            "official": {
+                "position_id": row["official_position_id"],
+                "side": row["official_side"],
+                "exit_reason": row["official_exit_reason"],
+                "r": official_r,
+            },
+            "shadow": {
+                "position_id": row["shadow_position_id"],
+                "side": row["shadow_side"],
+                "exit_reason": row["shadow_exit_reason"],
+                "r": shadow_r,
+                "mfe_r": row["shadow_mfe_r"],
+                "mae_r": row["shadow_mae_r"],
+            },
+            "shadow_minus_official_r": delta,
+            "interpretation": "OBSERVATIONAL_NOT_CAUSAL",
+        }
+        cursor = conn.execute(
+            """
+            INSERT OR IGNORE INTO comparison_autopsies (
+                comparison_id, test_era, timestamp, asset, category,
+                classification, official_position_id, shadow_position_id,
+                official_r, shadow_r, shadow_minus_official_r, details_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                row["id"],
+                test_era,
+                row["timestamp"],
+                row["asset"],
+                row["category"],
+                classification,
+                row["official_position_id"],
+                row["shadow_position_id"],
+                official_r,
+                shadow_r,
+                delta,
+                json.dumps(details, ensure_ascii=False, sort_keys=True),
+            ),
+        )
+        if cursor.rowcount:
+            created.append({
+                "id": cursor.lastrowid,
+                "comparison_id": row["id"],
+                "asset": row["asset"],
+                "classification": classification,
+                "official_r": official_r,
+                "shadow_r": shadow_r,
+                "shadow_minus_official_r": delta,
+            })
+
+    conn.commit()
+    conn.close()
+    return created
