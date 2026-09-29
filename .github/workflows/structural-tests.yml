@@ -14,6 +14,7 @@ on:
       - test_structural_core.py
       - test_shadow_structural.py
       - test_shadow_positions.py
+      - test_shadow_autopsy.py
       - .github/workflows/structural-tests.yml
   pull_request:
     paths:
@@ -26,6 +27,7 @@ on:
       - test_structural_core.py
       - test_shadow_structural.py
       - test_shadow_positions.py
+      - test_shadow_autopsy.py
 
 jobs:
   structural-core:
@@ -36,10 +38,12 @@ jobs:
         with:
           python-version: "3.12"
       - name: Compile integrated agent
-        run: python -m py_compile agent.py market_structure.py structural_core.py shadow_engine.py learning_engine.py telegram_commands.py paper_positions.py leverage_engine.py test_structural_core.py test_shadow_structural.py test_shadow_positions.py
+        run: python -m py_compile agent.py market_structure.py structural_core.py shadow_engine.py learning_engine.py telegram_commands.py paper_positions.py leverage_engine.py test_structural_core.py test_shadow_structural.py test_shadow_positions.py test_shadow_autopsy.py
       - name: Run structural regressions
         run: python test_structural_core.py
       - name: Run Shadow decision regressions
         run: python test_shadow_structural.py
       - name: Run Shadow position regressions
         run: python test_shadow_positions.py
+      - name: Run Official Shadow autopsy regressions
+        run: python test_shadow_autopsy.py
