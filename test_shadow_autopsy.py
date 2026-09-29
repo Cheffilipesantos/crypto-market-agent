@@ -76,6 +76,14 @@ try:
     insert_comparison(conn, ERA, "WIN", "OFFICIAL_ONLY", official_id=o_win,
                       official_side="SHORT")
 
+    o_amb = insert_official(conn, ERA, "AMB", "SHORT", 0.0, "AMBIGUOUS_1M")
+    conn.execute(
+        "UPDATE paper_positions SET status = 'AMBIGUOUS' WHERE id = ?",
+        (o_amb,),
+    )
+    insert_comparison(conn, ERA, "AMB", "OFFICIAL_ONLY", official_id=o_amb,
+                      official_side="SHORT")
+
     s_win = insert_shadow(conn, ERA, "SHADOW", "LONG", 3.0)
     insert_comparison(conn, ERA, "SHADOW", "SHADOW_ONLY", shadow_id=s_win,
                       shadow_side="LONG")
@@ -93,6 +101,7 @@ try:
     assert "SHADOW_AVOIDED_OFFICIAL_LOSS" in classes
     assert "SHADOW_MISSED_OFFICIAL_WIN" in classes
     assert "SHADOW_ONLY_WIN" in classes
+    assert "AMBIGUOUS_EXCLUDED" in classes
     assert "PAIRED_SHADOW_HIGHER_R" in classes
 
     pair = [x for x in created if x["classification"] == "PAIRED_SHADOW_HIGHER_R"][0]
@@ -107,7 +116,7 @@ try:
         (ERA,),
     ).fetchone()[0]
     conn.close()
-    assert count == 4
+    assert count == 5
 
     print("SHADOW AUTOPSY TESTS: OK")
 finally:
