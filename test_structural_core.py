@@ -4,6 +4,7 @@ from structural_core import (
     classify_pivots,
     structure_state,
     level_reaction,
+    detect_structure_breaks,
 )
 
 
@@ -68,5 +69,50 @@ failed = [
 ]
 reaction = level_reaction(failed, 100, 0.0015)
 assert reaction["event"] == "BEARISH_BREAK_FAILED"
+
+
+
+# BOS/CHOCH must use only the structure available before the break candle.
+bullish_pivots = [
+    {"index": 1, "type": "HIGH", "price": 100, "structure": "H"},
+    {"index": 2, "type": "LOW", "price": 90, "structure": "L"},
+    {"index": 3, "type": "HIGH", "price": 110, "structure": "HH"},
+    {"index": 4, "type": "LOW", "price": 95, "structure": "HL"},
+]
+bullish_candles = [
+    candle(96, 97, 95, 96, 0),
+    candle(96, 101, 95, 99, 1),
+    candle(99, 100, 89, 92, 2),
+    candle(92, 111, 91, 108, 3),
+    candle(108, 109, 94, 97, 4),
+    candle(97, 98, 95, 96, 5),
+    candle(96, 97, 93, 94, 6),
+]
+events = detect_structure_breaks(bullish_candles, bullish_pivots, 0.001)
+down = [e for e in events if e["direction"] == "DOWN" and e["pivot_index"] == 4]
+assert down
+assert down[-1]["kind"] == "CHOCH"
+assert down[-1]["prior_state"] == "BULLISH_STRUCTURE"
+
+bearish_pivots = [
+    {"index": 1, "type": "HIGH", "price": 110, "structure": "H"},
+    {"index": 2, "type": "LOW", "price": 100, "structure": "L"},
+    {"index": 3, "type": "HIGH", "price": 105, "structure": "LH"},
+    {"index": 4, "type": "LOW", "price": 90, "structure": "LL"},
+]
+bearish_candles = [
+    candle(104, 105, 103, 104, 0),
+    candle(104, 111, 103, 108, 1),
+    candle(108, 109, 99, 101, 2),
+    candle(101, 106, 100, 103, 3),
+    candle(103, 104, 89, 92, 4),
+    candle(92, 104, 91, 104, 5),
+    candle(104, 107, 103, 106, 6),
+]
+events = detect_structure_breaks(bearish_candles, bearish_pivots, 0.001)
+up = [e for e in events if e["direction"] == "UP" and e["pivot_index"] == 3]
+assert up
+assert up[-1]["kind"] == "CHOCH"
+assert up[-1]["prior_state"] == "BEARISH_STRUCTURE"
 
 print("STRUCTURAL CORE TESTS: OK")
