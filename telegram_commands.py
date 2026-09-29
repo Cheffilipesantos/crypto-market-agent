@@ -5,6 +5,7 @@ import urllib.request
 from datetime import datetime, timezone
 
 import paper_positions
+import shadow_engine
 
 
 def _request(token, method, params=None, timeout=10):
@@ -474,6 +475,67 @@ def posttrade_report(db_file, asset=None):
     return "\n".join(lines)
 
 
+def shadow_report(db_file):
+    summary = shadow_engine.comparison_summary(
+        db_file,
+        paper_positions.TEST_ERA,
+    )
+
+    conn = _connect(db_file)
+    open_rows = conn.execute(
+        """
+        SELECT *
+        FROM shadow_positions
+        WHERE test_era = ? AND status = 'OPEN'
+        ORDER BY opened_at
+        """,
+        (paper_positions.TEST_ERA,),
+    ).fetchall()
+    conn.close()
+
+    lines = [
+        "👥 OFICIAL × SHADOW",
+        "━━━━━━━━━━━━━━━━━━━━",
+        f"Comparações de abertura: {summary['comparisons']}",
+        f"🤝 Mesma direção: {summary['both_same_direction']}",
+        f"↔️ Direções diferentes: {summary['both_different_direction']}",
+        f"🔵 Só Oficial: {summary['official_only']}",
+        f"🟣 Só Shadow: {summary['shadow_only']}",
+        "",
+        "RESULTADOS JÁ CONCLUÍDOS",
+        f"🛡️ Loss Oficial evitado: {summary['shadow_avoided_official_loss']}",
+        f"⚠️ Win Oficial recusado: {summary['shadow_missed_official_win']}",
+        f"✅ Wins Shadow-only: {summary['shadow_only_wins']}",
+        f"❌ Losses Shadow-only: {summary['shadow_only_losses']}",
+        f"📊 Pares completos: {summary['completed_pairs']}",
+    ]
+
+    delta = summary["average_shadow_minus_official_r"]
+    if delta is not None:
+        lines.append(f"📐 Shadow − Oficial: {delta:+.2f}R/trade")
+
+    lines += [
+        "",
+        f"POSIÇÕES SHADOW ABERTAS: {len(open_rows)}",
+    ]
+
+    for row in open_rows:
+        lines.append(
+            f"• {row['asset']} {row['side']} | "
+            f"entrada {_fmt_price(row['entry'])} | "
+            f"stop {_fmt_price(row['stop'])} | "
+            f"MFE {float(row['mfe_r'] or 0):+.2f}R | "
+            f"MAE {float(row['mae_r'] or 0):+.2f}R"
+        )
+
+    lines += [
+        "",
+        "🧪 Shadow observacional — não envia ordens.",
+        "⚠️ Amostra pequena não promove estratégia.",
+    ]
+    return "\n".join(lines)
+
+
 def help_text():
     return "\n".join([
         "🤖 COMANDOS DO AGENTE",
@@ -501,6 +563,9 @@ def help_text():
         "",
         "/posttrade BTC",
         "Post-trade de um ativo",
+        "",
+        "/shadow",
+        "Comparativo Oficial × Shadow",
         "",
         "Ativos: BTC ETH SOL AAVE BNB",
     ])
@@ -546,6 +611,9 @@ def process_command(db_file, token, allowed_chat_id, text):
                 return "Ativo inválido. Use BTC, ETH, SOL, AAVE ou BNB."
 
         return performance(db_file, asset)
+
+    if command == "/shadow":
+        return shadow_report(db_file)
 
     if command == "/posttrade":
         asset = None
