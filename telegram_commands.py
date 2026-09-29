@@ -87,6 +87,7 @@ def positions_report(db_file):
         ORDER BY opened_at
         """,
         (paper_positions.TEST_ERA,),
+        , (paper_positions.TEST_ERA,)
     ).fetchall()
 
     conn.close()
@@ -305,6 +306,7 @@ def performance(db_file, asset=None):
             ORDER BY opened_at
             """,
             (paper_positions.TEST_ERA,),
+            , (paper_positions.TEST_ERA,)
         ).fetchall()
 
     conn.close()
