@@ -5,6 +5,7 @@ from structural_core import (
     structure_state,
     level_reaction,
     detect_structure_breaks,
+    detect_raw_pivots,
 )
 
 
@@ -114,5 +115,23 @@ up = [e for e in events if e["direction"] == "UP" and e["pivot_index"] == 3]
 assert up
 assert up[-1]["kind"] == "CHOCH"
 assert up[-1]["prior_state"] == "BEARISH_STRUCTURE"
+
+# A raw pivot is not usable until its right-side confirmation candles have closed.
+confirmation_series = [
+    candle(100, 101, 99, 100, 0),
+    candle(100, 102, 99, 101, 1),
+    candle(101, 110, 100, 105, 2),  # candidate HIGH
+    candle(105, 109, 104, 108, 3),  # first right candle
+    candle(108, 109, 107, 108, 4),  # confirms pivot at index 2
+    candle(108, 112, 108, 112, 5),  # only now may break confirmed high
+]
+raw = detect_raw_pivots(confirmation_series, left=2, right=2)
+high = [p for p in raw if p["type"] == "HIGH" and p["index"] == 2][0]
+assert high["confirmed_index"] == 4
+
+classified = classify_pivots(normalize_pivots(raw), 0.001)
+events = detect_structure_breaks(confirmation_series, classified, 0.001)
+assert not any(e["pivot_index"] == 2 and e["break_index"] <= 4 for e in events)
+assert any(e["pivot_index"] == 2 and e["break_index"] == 5 for e in events)
 
 print("STRUCTURAL CORE TESTS: OK")
