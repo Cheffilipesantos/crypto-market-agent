@@ -46,6 +46,14 @@ assert out["exit_reason"] == "STOP"
 assert out["result_r"] == -1.0
 
 
+# If the same 1m candle contains stop and any newly reached target,
+# ordering is unknowable from OHLC alone.
+ambiguous_t1 = [candle(60_000, 100, 102.1, 97.9, 100)]
+out = resolve_plan(short_plan, ambiguous_t1)
+assert out["status"] == "AMBIGUOUS"
+assert out["result_r"] == 0.0
+
+
 # If the same 1m candle contains stop and T3, ordering is unknowable.
 ambiguous = [candle(60_000, 100, 102.1, 93.9, 100)]
 out = resolve_plan(short_plan, ambiguous)
