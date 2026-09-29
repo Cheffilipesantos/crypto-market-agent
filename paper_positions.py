@@ -13,7 +13,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 
-TEST_ERA = "PAPER_V2_MARGIN30_20260923"
+TEST_ERA = "STRUCTURAL_SHADOW_V1_20260929"
 
 
 def now_iso():
