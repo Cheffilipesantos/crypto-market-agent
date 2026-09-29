@@ -134,4 +134,46 @@ events = detect_structure_breaks(confirmation_series, classified, 0.001)
 assert not any(e["pivot_index"] == 2 and e["break_index"] <= 4 for e in events)
 assert any(e["pivot_index"] == 2 and e["break_index"] == 5 for e in events)
 
+
+# Continuation in the direction of established structure must be BOS, not CHOCH.
+bull_bos_pivots = [
+    {"index": 1, "type": "HIGH", "price": 100, "structure": "H"},
+    {"index": 2, "type": "LOW", "price": 90, "structure": "L"},
+    {"index": 3, "type": "HIGH", "price": 110, "structure": "HH"},
+    {"index": 4, "type": "LOW", "price": 95, "structure": "HL"},
+]
+bull_bos_candles = [
+    candle(96, 97, 95, 96, 0),
+    candle(96, 101, 95, 99, 1),
+    candle(99, 100, 89, 92, 2),
+    candle(92, 111, 91, 108, 3),
+    candle(108, 109, 94, 97, 4),
+    candle(97, 112, 96, 111, 5),
+]
+events = detect_structure_breaks(bull_bos_candles, bull_bos_pivots, 0.001)
+up_bos = [e for e in events if e["direction"] == "UP" and e["pivot_index"] == 3]
+assert up_bos
+assert up_bos[-1]["kind"] == "BOS"
+assert up_bos[-1]["prior_state"] == "BULLISH_STRUCTURE"
+
+bear_bos_pivots = [
+    {"index": 1, "type": "HIGH", "price": 110, "structure": "H"},
+    {"index": 2, "type": "LOW", "price": 100, "structure": "L"},
+    {"index": 3, "type": "HIGH", "price": 105, "structure": "LH"},
+    {"index": 4, "type": "LOW", "price": 90, "structure": "LL"},
+]
+bear_bos_candles = [
+    candle(104, 105, 103, 104, 0),
+    candle(104, 111, 103, 108, 1),
+    candle(108, 109, 99, 101, 2),
+    candle(101, 106, 100, 103, 3),
+    candle(103, 104, 89, 92, 4),
+    candle(92, 93, 88, 89, 5),
+]
+events = detect_structure_breaks(bear_bos_candles, bear_bos_pivots, 0.001)
+down_bos = [e for e in events if e["direction"] == "DOWN" and e["pivot_index"] == 4]
+assert down_bos
+assert down_bos[-1]["kind"] == "BOS"
+assert down_bos[-1]["prior_state"] == "BEARISH_STRUCTURE"
+
 print("STRUCTURAL CORE TESTS: OK")
