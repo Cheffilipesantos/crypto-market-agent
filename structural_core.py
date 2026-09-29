@@ -165,54 +165,75 @@ def structure_state(pivots):
 
 
 def detect_structure_breaks(candles, pivots, tolerance_pct):
-    """Detect close-confirmed BOS/CHOCH against the latest prior swing level."""
+    """Detect BOS/CHOCH using only structure known before each break candle.
+
+    This deliberately avoids future leakage: the structural state for candle i
+    is calculated only from pivots whose index is strictly earlier than i.
+    """
     events = []
+    broken = set()
     if len(candles) < 2 or not pivots:
         return events
 
-    bias = "UNKNOWN"
-    for pivot in pivots:
-        label = pivot.get("structure")
-        if label == "HH":
-            bias = "BULLISH"
-        elif label == "LL":
-            bias = "BEARISH"
-
-    for pivot in pivots:
-        idx = int(pivot["index"])
-        if idx + 1 >= len(candles):
+    for i in range(1, len(candles)):
+        prior = [p for p in pivots if int(p["index"]) < i]
+        if not prior:
             continue
-        level = float(pivot["price"])
-        upper = level * (1 + tolerance_pct)
-        lower = level * (1 - tolerance_pct)
-        for i in range(idx + 1, len(candles)):
-            close = _f(candles[i], "close")
-            prev_close = _f(candles[i - 1], "close")
-            direction = None
-            if pivot["type"] == "HIGH" and prev_close <= upper and close > upper:
-                direction = "UP"
-            elif pivot["type"] == "LOW" and prev_close >= lower and close < lower:
-                direction = "DOWN"
-            if direction:
-                if direction == "UP":
-                    kind = "CHOCH" if bias == "BEARISH" else "BOS"
+
+        prior_state = structure_state(prior)["state"]
+        previous_close = _f(candles[i - 1], "close")
+        close = _f(candles[i], "close")
+        highs = [p for p in prior if p["type"] == "HIGH"]
+        lows = [p for p in prior if p["type"] == "LOW"]
+        crossings = []
+
+        if highs:
+            pivot = highs[-1]
+            level = float(pivot["price"])
+            upper = level * (1 + tolerance_pct)
+            if previous_close <= upper and close > upper:
+                crossings.append(("UP", pivot, level))
+
+        if lows:
+            pivot = lows[-1]
+            level = float(pivot["price"])
+            lower = level * (1 - tolerance_pct)
+            if previous_close >= lower and close < lower:
+                crossings.append(("DOWN", pivot, level))
+
+        for direction, pivot, level in crossings:
+            key = (int(pivot["index"]), direction)
+            if key in broken:
+                continue
+
+            if direction == "UP":
+                if prior_state == "BEARISH_STRUCTURE":
+                    kind = "CHOCH"
+                elif prior_state == "BULLISH_STRUCTURE":
+                    kind = "BOS"
                 else:
-                    kind = "CHOCH" if bias == "BULLISH" else "BOS"
-                events.append({
-                    "kind": kind,
-                    "direction": direction,
-                    "level": level,
-                    "pivot_index": idx,
-                    "break_index": i,
-                    "time": candles[i].get("time"),
-                    "close": close,
-                })
-                break
-    # Deduplicate same break candle/direction, keeping the most recently formed level.
-    unique = {}
-    for event in events:
-        unique[(event["break_index"], event["direction"])] = event
-    return sorted(unique.values(), key=lambda x: x["break_index"])
+                    kind = "STRUCTURE_BREAK"
+            else:
+                if prior_state == "BULLISH_STRUCTURE":
+                    kind = "CHOCH"
+                elif prior_state == "BEARISH_STRUCTURE":
+                    kind = "BOS"
+                else:
+                    kind = "STRUCTURE_BREAK"
+
+            events.append({
+                "kind": kind,
+                "direction": direction,
+                "level": level,
+                "pivot_index": int(pivot["index"]),
+                "break_index": i,
+                "time": candles[i].get("time"),
+                "close": close,
+                "prior_state": prior_state,
+            })
+            broken.add(key)
+
+    return events
 
 
 def cluster_levels(pivots, tolerance_pct, min_touches=2):
@@ -251,64 +272,108 @@ def cluster_levels(pivots, tolerance_pct, min_touches=2):
 
 
 def level_reaction(candles, level, tolerance_pct, lookback=24):
-    """Classify break/retest/failure with close confirmation and extension."""
+    """Track one level as a break -> extension -> retest/failure state machine.
+
+    A decisive recross after a confirmed extension resolves the original break
+    as FAILED. The same candle is not immediately re-labelled as a fresh break
+    in the opposite direction; that prevents a failure from erasing its cause.
+    """
     if len(candles) < 3:
         return {"event": "INSUFFICIENT_DATA"}
+
     sample = candles[-lookback:]
     level = float(level)
     upper = level * (1 + tolerance_pct)
     lower = level * (1 - tolerance_pct)
-    breaks = []
-    for i in range(1, len(sample)):
-        prev = _f(sample[i-1], "close")
-        close = _f(sample[i], "close")
-        if prev <= upper and close > upper:
-            breaks.append((i, "UP"))
-        elif prev >= lower and close < lower:
-            breaks.append((i, "DOWN"))
-    if not breaks:
-        last = sample[-1]
-        if _f(last, "low") < lower and _f(last, "close") > upper:
-            return {"event": "LOWER_SWEEP_RECLAIMED", "direction": "UP"}
-        if _f(last, "high") > upper and _f(last, "close") < lower:
-            return {"event": "UPPER_SWEEP_REJECTED", "direction": "DOWN"}
-        return {"event": "NO_RECENT_BREAK"}
-
-    break_index, direction = breaks[-1]
-    after = sample[break_index+1:]
-    if not after:
-        return {"event": "BREAK_JUST_OCCURRED", "direction": direction}
-
     extension = tolerance_pct * 1.5
-    if direction == "UP":
-        extended = any(_f(c, "close") > level * (1 + extension) for c in after)
-        if not extended:
-            return {"event": "BULLISH_BREAK_UNCONFIRMED", "direction": direction}
-        touched = any(_f(c, "low") <= upper for c in after)
-        last_close = _f(after[-1], "close")
-        if touched and last_close < lower:
-            event = "BULLISH_BREAK_FAILED"
-        elif touched and last_close > upper:
-            event = "BULLISH_RETEST_HELD"
-        elif touched:
-            event = "BULLISH_RETEST_IN_PROGRESS"
+    active = None
+    last_resolved = None
+
+    for i in range(1, len(sample)):
+        previous_close = _f(sample[i - 1], "close")
+        close = _f(sample[i], "close")
+        cross_up = previous_close <= upper and close > upper
+        cross_down = previous_close >= lower and close < lower
+
+        if active is not None:
+            direction = active["direction"]
+
+            if direction == "UP":
+                if close > level * (1 + extension):
+                    active["extended"] = True
+                if active["extended"] and _f(sample[i], "low") <= upper:
+                    active["touched"] = True
+                if close < lower:
+                    last_resolved = {
+                        "event": "BULLISH_BREAK_FAILED",
+                        "direction": "UP",
+                        "break_index": active["break_index"],
+                        "failure_index": i,
+                    }
+                    active = None
+                    continue
+            else:
+                if close < level * (1 - extension):
+                    active["extended"] = True
+                if active["extended"] and _f(sample[i], "high") >= lower:
+                    active["touched"] = True
+                if close > upper:
+                    last_resolved = {
+                        "event": "BEARISH_BREAK_FAILED",
+                        "direction": "DOWN",
+                        "break_index": active["break_index"],
+                        "failure_index": i,
+                    }
+                    active = None
+                    continue
+
+        if active is None:
+            if cross_up:
+                active = {
+                    "direction": "UP",
+                    "break_index": i,
+                    "extended": close > level * (1 + extension),
+                    "touched": False,
+                }
+            elif cross_down:
+                active = {
+                    "direction": "DOWN",
+                    "break_index": i,
+                    "extended": close < level * (1 - extension),
+                    "touched": False,
+                }
+
+    if active is not None:
+        direction = active["direction"]
+        prefix = "BULLISH" if direction == "UP" else "BEARISH"
+
+        if not active["extended"]:
+            return {"event": prefix + "_BREAK_UNCONFIRMED", "direction": direction}
+
+        if active["touched"]:
+            last_close = _f(sample[-1], "close")
+            if direction == "UP":
+                event = "BULLISH_RETEST_HELD" if last_close > upper else "BULLISH_RETEST_IN_PROGRESS"
+            else:
+                event = "BEARISH_RETEST_HELD" if last_close < lower else "BEARISH_RETEST_IN_PROGRESS"
         else:
-            event = "AWAITING_BULLISH_RETEST"
-    else:
-        extended = any(_f(c, "close") < level * (1 - extension) for c in after)
-        if not extended:
-            return {"event": "BEARISH_BREAK_UNCONFIRMED", "direction": direction}
-        touched = any(_f(c, "high") >= lower for c in after)
-        last_close = _f(after[-1], "close")
-        if touched and last_close > upper:
-            event = "BEARISH_BREAK_FAILED"
-        elif touched and last_close < lower:
-            event = "BEARISH_RETEST_HELD"
-        elif touched:
-            event = "BEARISH_RETEST_IN_PROGRESS"
-        else:
-            event = "AWAITING_BEARISH_RETEST"
-    return {"event": event, "direction": direction}
+            event = "AWAITING_" + prefix + "_RETEST"
+
+        return {
+            "event": event,
+            "direction": direction,
+            "break_index": active["break_index"],
+        }
+
+    if last_resolved is not None:
+        return last_resolved
+
+    last = sample[-1]
+    if _f(last, "low") < lower and _f(last, "close") > upper:
+        return {"event": "LOWER_SWEEP_RECLAIMED", "direction": "UP"}
+    if _f(last, "high") > upper and _f(last, "close") < lower:
+        return {"event": "UPPER_SWEEP_REJECTED", "direction": "DOWN"}
+    return {"event": "NO_RECENT_BREAK"}
 
 
 def analyze(candles, left=2, right=2, max_levels=5):
