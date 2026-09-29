@@ -278,6 +278,227 @@ def compare_market_state(previous, current):
     }
 
 
+def get_open_shadow_position(db_file, test_era, asset):
+    conn = sqlite3.connect(db_file)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        """
+        SELECT *
+        FROM shadow_positions
+        WHERE test_era = ? AND asset = ? AND status = 'OPEN'
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (test_era, asset),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def _previous_shadow_signature(db_file, test_era, asset):
+    conn = sqlite3.connect(db_file)
+    row = conn.execute(
+        """
+        SELECT shadow_decision, shadow_side, shadow_setup_type
+        FROM shadow_decisions
+        WHERE test_era = ? AND asset = ?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (test_era, asset),
+    ).fetchone()
+    conn.close()
+    return tuple(row) if row else None
+
+
+def open_shadow_position(
+    db_file,
+    test_era,
+    data,
+    plan,
+    snapshot_id,
+    execution_candles=None,
+):
+    if plan.get("decision") not in ("LONG", "SHORT"):
+        return None
+    if get_open_shadow_position(db_file, test_era, data["asset"]):
+        return None
+
+    previous_signature = _previous_shadow_signature(
+        db_file,
+        test_era,
+        data["asset"],
+    )
+    current_signature = (
+        plan.get("decision"),
+        plan.get("side"),
+        plan.get("setup_type"),
+    )
+    if previous_signature == current_signature:
+        return None
+
+    last_candle_ms = None
+    if execution_candles:
+        last_candle_ms = max(int(c["time"]) for c in execution_candles)
+
+    conn = sqlite3.connect(db_file)
+    cursor = conn.execute(
+        """
+        INSERT INTO shadow_positions (
+            test_era, asset, side, setup_type,
+            entry, stop, t1, t2, t3, risk_per_unit,
+            status, opened_at, last_candle_ms, entry_snapshot_id
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?)
+        """,
+        (
+            test_era,
+            data["asset"],
+            plan["side"],
+            plan["setup_type"],
+            float(plan["entry"]),
+            float(plan["stop"]),
+            float(plan["t1"]),
+            float(plan["t2"]),
+            float(plan["t3"]),
+            float(plan["risk_per_unit"]),
+            data["timestamp"],
+            last_candle_ms,
+            snapshot_id,
+        ),
+    )
+    conn.commit()
+    position_id = cursor.lastrowid
+    conn.close()
+    return position_id
+
+
+def update_shadow_position(
+    db_file,
+    test_era,
+    asset,
+    execution_candles,
+    closed_at,
+):
+    position = get_open_shadow_position(db_file, test_era, asset)
+    if position is None or not execution_candles:
+        return None
+
+    candles = sorted(execution_candles, key=lambda x: int(x["time"]))
+    last_ms = position.get("last_candle_ms")
+    if last_ms is not None:
+        candles = [c for c in candles if int(c["time"]) > int(last_ms)]
+    if not candles:
+        return None
+
+    side = position["side"]
+    entry = float(position["entry"])
+    stop = float(position["stop"])
+    t1 = float(position["t1"])
+    t2 = float(position["t2"])
+    t3 = float(position["t3"])
+    risk = float(position["risk_per_unit"])
+    mfe_r = float(position.get("mfe_r") or 0.0)
+    mae_r = float(position.get("mae_r") or 0.0)
+    t1_hit = int(position.get("t1_hit") or 0)
+    t2_hit = int(position.get("t2_hit") or 0)
+    exit_reason = None
+    pnl_r = None
+    final_ms = int(candles[-1]["time"])
+
+    for candle in candles:
+        high = float(candle["high"])
+        low = float(candle["low"])
+        final_ms = int(candle["time"])
+
+        if side == "LONG":
+            favorable = (high - entry) / risk
+            adverse = (low - entry) / risk
+            stop_hit = low <= stop
+            t1_now = high >= t1
+            t2_now = high >= t2
+            t3_now = high >= t3
+        else:
+            favorable = (entry - low) / risk
+            adverse = (entry - high) / risk
+            stop_hit = high >= stop
+            t1_now = low <= t1
+            t2_now = low <= t2
+            t3_now = low <= t3
+
+        mfe_r = max(mfe_r, favorable)
+        mae_r = min(mae_r, adverse)
+
+        # With OHLC only, target+stop inside the same 1m candle has no
+        # trustworthy event order. Exclude it from normal win/loss learning.
+        if stop_hit and (t1_now or t2_now or t3_now):
+            exit_reason = "AMBIGUOUS"
+            pnl_r = 0.0
+            break
+
+        if stop_hit:
+            exit_reason = "STOP"
+            pnl_r = -1.0
+            break
+
+        if t1_now:
+            t1_hit = 1
+        if t2_now:
+            t2_hit = 1
+        if t3_now:
+            t1_hit = 1
+            t2_hit = 1
+            exit_reason = "T3"
+            pnl_r = 3.0
+            break
+
+    status = "CLOSED" if exit_reason else "OPEN"
+
+    conn = sqlite3.connect(db_file)
+    conn.execute(
+        """
+        UPDATE shadow_positions
+        SET status = ?,
+            closed_at = CASE WHEN ? = 'CLOSED' THEN ? ELSE closed_at END,
+            exit_reason = COALESCE(?, exit_reason),
+            pnl_r = COALESCE(?, pnl_r),
+            mfe_r = ?,
+            mae_r = ?,
+            t1_hit = ?,
+            t2_hit = ?,
+            last_candle_ms = ?
+        WHERE id = ?
+        """,
+        (
+            status,
+            status,
+            closed_at,
+            exit_reason,
+            pnl_r,
+            mfe_r,
+            mae_r,
+            t1_hit,
+            t2_hit,
+            final_ms,
+            position["id"],
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    return {
+        "id": position["id"],
+        "status": status,
+        "side": side,
+        "exit_reason": exit_reason,
+        "pnl_r": pnl_r,
+        "mfe_r": mfe_r,
+        "mae_r": mae_r,
+        "t1_hit": bool(t1_hit),
+        "t2_hit": bool(t2_hit),
+    }
+
+
 def _canonical_tf(market_structure_context, timeframe):
     if not market_structure_context:
         return {}
