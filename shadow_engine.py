@@ -708,6 +708,7 @@ def evaluate_shadow(
     learning_memory,
     previous_entry_snapshot=None,
     market_structure_context=None,
+    execution_candles=None,
 ):
     structural_plan = build_structural_plan(
         data,
@@ -734,6 +735,17 @@ def evaluate_shadow(
     side = structural_plan.get("side", "NONE")
     setup_type = structural_plan.get("setup_type", "NONE")
     reason = structural_plan.get("reason")
+
+    # Open before saving the current decision so signal novelty is compared
+    # against the previous cycle, never against itself.
+    opened_position_id = open_shadow_position(
+        db_file,
+        test_era,
+        data,
+        structural_plan,
+        snapshot_id,
+        execution_candles=execution_candles,
+    )
 
     save_shadow_decision(
         db_file,
@@ -772,5 +784,6 @@ def evaluate_shadow(
         "reason": reason,
         "plan": structural_plan,
         "comparison": comparison,
+        "opened_position_id": opened_position_id,
         "evidence": evidence,
     }
